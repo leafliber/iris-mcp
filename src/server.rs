@@ -1,9 +1,13 @@
-use crate::keyboard::{KeyboardController, SystemCommand};
-use crate::mouse::MouseController;
+use crate::monitor_keyboard::{self, KeyEvent, KeyState};
+use crate::monitor_mouse::{self, MouseEvent, MouseEventKind};
+use crate::monitor_screen::{self, ScreenEvent, ScreenEventKind};
+use crate::operator_keyboard::{KeyboardController, SystemCommand};
+use crate::operator_mouse::MouseController;
 use enigo::{Button, Direction, Enigo, Key, Settings};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
+use std::sync::{Mutex, OnceLock};
 
 #[derive(Debug, Deserialize)]
 struct JsonRpcRequest {
@@ -29,6 +33,211 @@ struct JsonRpcError {
     message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     data: Option<Value>,
+}
+
+struct ScreenMonitorState {
+    events: Mutex<Vec<ScreenEvent>>,
+    #[allow(dead_code)]
+    handle: Option<monitor_screen::MonitorHandle>,
+}
+
+struct KeyboardMonitorState {
+    events: Mutex<Vec<KeyEvent>>,
+    #[allow(dead_code)]
+    handle: Option<monitor_keyboard::MonitorHandle>,
+}
+
+struct MouseMonitorState {
+    events: Mutex<Vec<MouseEvent>>,
+    #[allow(dead_code)]
+    handle: Option<monitor_mouse::MonitorHandle>,
+}
+
+static SCREEN_STATE: OnceLock<Result<ScreenMonitorState, String>> = OnceLock::new();
+static KEYBOARD_STATE: OnceLock<Result<KeyboardMonitorState, String>> = OnceLock::new();
+static MOUSE_STATE: OnceLock<Result<MouseMonitorState, String>> = OnceLock::new();
+
+fn ensure_screen_monitor_started() -> Result<&'static ScreenMonitorState, JsonRpcError> {
+    SCREEN_STATE.get_or_init(|| {
+        let events = Mutex::new(Vec::new());
+
+        #[cfg(target_os = "macos")]
+        {
+            match monitor_screen::start_monitor(|evt| {
+                if let Some(Ok(state)) = SCREEN_STATE.get() {
+                    if let Ok(mut guard) = state.events.lock() {
+                        guard.push(evt);
+                    }
+                }
+            }) {
+                Ok(handle) => Ok(ScreenMonitorState {
+                    events,
+                    handle: Some(handle),
+                }),
+                Err(e) => Err(e.to_string()),
+            }
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            Err("screen monitor unsupported on this platform".to_string())
+        }
+    });
+
+    match SCREEN_STATE.get().expect("state initialized") {
+        Ok(state) => Ok(state),
+        Err(msg) => Err(JsonRpcError {
+            code: -32001,
+            message: msg.clone(),
+            data: None,
+        }),
+    }
+}
+
+fn ensure_keyboard_monitor_started() -> Result<&'static KeyboardMonitorState, JsonRpcError> {
+    KEYBOARD_STATE.get_or_init(|| {
+        let events = Mutex::new(Vec::new());
+
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+        {
+            match monitor_keyboard::start_monitor(|evt| {
+                if let Some(Ok(state)) = KEYBOARD_STATE.get() {
+                    if let Ok(mut guard) = state.events.lock() {
+                        guard.push(evt);
+                    }
+                }
+            }) {
+                Ok(handle) => Ok(KeyboardMonitorState {
+                    events,
+                    handle: Some(handle),
+                }),
+                Err(e) => Err(e.to_string()),
+            }
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        {
+            Err("keyboard monitor unsupported on this platform".to_string())
+        }
+    });
+
+    match KEYBOARD_STATE.get().expect("state initialized") {
+        Ok(state) => Ok(state),
+        Err(msg) => Err(JsonRpcError {
+            code: -32002,
+            message: msg.clone(),
+            data: None,
+        }),
+    }
+}
+
+fn ensure_mouse_monitor_started() -> Result<&'static MouseMonitorState, JsonRpcError> {
+    MOUSE_STATE.get_or_init(|| {
+        let events = Mutex::new(Vec::new());
+
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+        {
+            match monitor_mouse::start_monitor(|evt| {
+                if let Some(Ok(state)) = MOUSE_STATE.get() {
+                    if let Ok(mut guard) = state.events.lock() {
+                        guard.push(evt);
+                    }
+                }
+            }) {
+                Ok(handle) => Ok(MouseMonitorState {
+                    events,
+                    handle: Some(handle),
+                }),
+                Err(e) => Err(e.to_string()),
+            }
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        {
+            Err("mouse monitor unsupported on this platform".to_string())
+        }
+    });
+
+    match MOUSE_STATE.get().expect("state initialized") {
+        Ok(state) => Ok(state),
+        Err(msg) => Err(JsonRpcError {
+            code: -32003,
+            message: msg.clone(),
+            data: None,
+        }),
+    }
+}
+
+fn screen_event_to_json(evt: &ScreenEvent) -> Value {
+    let kind = match evt.kind {
+        ScreenEventKind::GeometryChanged { width, height, scale } => json!({
+            "type": "geometry_changed",
+            "width": width,
+            "height": height,
+            "scale": scale
+        }),
+        ScreenEventKind::DisplayAdded => json!({ "type": "display_added" }),
+        ScreenEventKind::DisplayRemoved => json!({ "type": "display_removed" }),
+        ScreenEventKind::FrameCaptured { width, height, format } => json!({
+            "type": "frame_captured",
+            "width": width,
+            "height": height,
+            "format": format,
+        }),
+    };
+
+    json!({
+        "timestamp_micros": evt.timestamp_micros,
+        "kind": kind,
+    })
+}
+
+fn keyboard_event_to_json(evt: &KeyEvent) -> Value {
+    let code = match &evt.code {
+        monitor_keyboard::KeyCode::Char(c) => json!({ "type": "char", "value": c }),
+        monitor_keyboard::KeyCode::Named(name) => json!({ "type": "named", "value": name }),
+        monitor_keyboard::KeyCode::ScanCode(code) => json!({ "type": "scancode", "value": code }),
+    };
+    let state = match evt.state {
+        KeyState::Press => "press",
+        KeyState::Release => "release",
+        KeyState::Repeat => "repeat",
+    };
+
+    json!({
+        "timestamp_micros": evt.timestamp_micros,
+        "code": code,
+        "state": state,
+    })
+}
+
+fn mouse_event_to_json(evt: &MouseEvent) -> Value {
+    let kind = match evt.kind {
+        MouseEventKind::Move { x, y } => json!({ "type": "move", "x": x, "y": y }),
+        MouseEventKind::Button { button, state } => {
+            let button = match button {
+                monitor_mouse::MouseButton::Left => "left".to_string(),
+                monitor_mouse::MouseButton::Middle => "middle".to_string(),
+                monitor_mouse::MouseButton::Right => "right".to_string(),
+                monitor_mouse::MouseButton::Other(v) => format!("other_{}", v),
+            };
+            let state = match state {
+                monitor_mouse::ButtonState::Press => "press",
+                monitor_mouse::ButtonState::Release => "release",
+            };
+            json!({ "type": "button", "button": button, "state": state })
+        }
+        MouseEventKind::Scroll { delta_x, delta_y } => json!({
+            "type": "scroll",
+            "delta_x": delta_x,
+            "delta_y": delta_y,
+        }),
+    };
+
+    json!({
+        "timestamp_micros": evt.timestamp_micros,
+        "kind": kind,
+    })
 }
 
 fn parse_button(s: &str) -> Result<Button, JsonRpcError> {
@@ -231,6 +440,48 @@ fn handle_list_tools(_params: Option<Value>) -> Value {
                         }
                     },
                     "required": ["key", "direction"]
+                }
+            }),
+            json!({
+                "name": "monitor_screen_events",
+                "description": "获取自上次游标后的最新屏幕监控事件（自动启动屏幕监控）",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "cursor": {
+                            "type": "integer",
+                            "description": "从该游标开始读取事件，默认0"
+                        }
+                    },
+                    "required": []
+                }
+            }),
+            json!({
+                "name": "monitor_keyboard_events",
+                "description": "获取自上次游标后的键盘监控事件（自动启动键盘监控）",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "cursor": {
+                            "type": "integer",
+                            "description": "从该游标开始读取事件，默认0"
+                        }
+                    },
+                    "required": []
+                }
+            }),
+            json!({
+                "name": "monitor_mouse_events",
+                "description": "获取自上次游标后的鼠标监控事件（自动启动鼠标监控）",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "cursor": {
+                            "type": "integer",
+                            "description": "从该游标开始读取事件，默认0"
+                        }
+                    },
+                    "required": []
                 }
             })
         ]
@@ -647,6 +898,111 @@ fn handle_call_tool(params: Option<Value>) -> Result<Value, JsonRpcError> {
                     "type": "text",
                     "text": format!("已执行按键{}操作: {}", key_str, direction_str)
                 }]
+            }))
+        }
+        "monitor_screen_events" => {
+            let cursor = arguments["cursor"].as_u64().unwrap_or(0) as usize;
+            let state = ensure_screen_monitor_started()?;
+            let events_guard = state.events.lock().map_err(|e| JsonRpcError {
+                code: -32603,
+                message: format!("Failed to lock events: {}", e),
+                data: None,
+            })?;
+
+            let total = events_guard.len();
+            let slice = if cursor >= total {
+                &[][..]
+            } else {
+                &events_guard[cursor..]
+            };
+
+            let events_json: Vec<Value> = slice.iter().map(screen_event_to_json).collect();
+            let next_cursor = total;
+
+            Ok(json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": format!("返回{}条屏幕事件，next_cursor={} (total={})", events_json.len(), next_cursor, total)
+                    },
+                    {
+                        "type": "json",
+                        "json": {
+                            "events": events_json,
+                            "next_cursor": next_cursor
+                        }
+                    }
+                ]
+            }))
+        }
+        "monitor_keyboard_events" => {
+            let cursor = arguments["cursor"].as_u64().unwrap_or(0) as usize;
+            let state = ensure_keyboard_monitor_started()?;
+            let events_guard = state.events.lock().map_err(|e| JsonRpcError {
+                code: -32603,
+                message: format!("Failed to lock events: {}", e),
+                data: None,
+            })?;
+
+            let total = events_guard.len();
+            let slice = if cursor >= total {
+                &[][..]
+            } else {
+                &events_guard[cursor..]
+            };
+
+            let events_json: Vec<Value> = slice.iter().map(keyboard_event_to_json).collect();
+            let next_cursor = total;
+
+            Ok(json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": format!("返回{}条键盘事件，next_cursor={} (total={})", events_json.len(), next_cursor, total)
+                    },
+                    {
+                        "type": "json",
+                        "json": {
+                            "events": events_json,
+                            "next_cursor": next_cursor
+                        }
+                    }
+                ]
+            }))
+        }
+        "monitor_mouse_events" => {
+            let cursor = arguments["cursor"].as_u64().unwrap_or(0) as usize;
+            let state = ensure_mouse_monitor_started()?;
+            let events_guard = state.events.lock().map_err(|e| JsonRpcError {
+                code: -32603,
+                message: format!("Failed to lock events: {}", e),
+                data: None,
+            })?;
+
+            let total = events_guard.len();
+            let slice = if cursor >= total {
+                &[][..]
+            } else {
+                &events_guard[cursor..]
+            };
+
+            let events_json: Vec<Value> = slice.iter().map(mouse_event_to_json).collect();
+            let next_cursor = total;
+
+            Ok(json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": format!("返回{}条鼠标事件，next_cursor={} (total={})", events_json.len(), next_cursor, total)
+                    },
+                    {
+                        "type": "json",
+                        "json": {
+                            "events": events_json,
+                            "next_cursor": next_cursor
+                        }
+                    }
+                ]
             }))
         }
         _ => Err(JsonRpcError {

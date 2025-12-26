@@ -1,7 +1,4 @@
-mod mouse;
-mod keyboard;
-mod server;
-
+use iris_mcp::server;
 use std::io;
 
 fn main() -> io::Result<()> {
