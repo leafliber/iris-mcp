@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use enigo::{
     Button, Coordinate, Direction, Enigo, Mouse,
 };
