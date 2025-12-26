@@ -59,21 +59,29 @@ static MOUSE_STATE: OnceLock<Result<MouseMonitorState, String>> = OnceLock::new(
 
 fn ensure_screen_monitor_started() -> Result<&'static ScreenMonitorState, JsonRpcError> {
     SCREEN_STATE.get_or_init(|| {
-        let events = Mutex::new(Vec::new());
-
         #[cfg(target_os = "macos")]
         {
-            match monitor_screen::start_monitor(|evt| {
-                if let Some(Ok(state)) = SCREEN_STATE.get() {
-                    if let Ok(mut guard) = state.events.lock() {
-                        guard.push(evt);
-                    }
+            use std::sync::Arc;
+            
+            // Create events buffer first
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let events_clone = Arc::clone(&events);
+            
+            // Start monitor with the cloned events buffer
+            match monitor_screen::start_monitor(move |evt| {
+                if let Ok(mut guard) = events_clone.lock() {
+                    guard.push(evt);
                 }
             }) {
-                Ok(handle) => Ok(ScreenMonitorState {
-                    events,
-                    handle: Some(handle),
-                }),
+                Ok(handle) => {
+                    // Convert Arc<Mutex> back to Mutex for the state
+                    let final_events = Arc::try_unwrap(events)
+                        .unwrap_or_else(|arc| Mutex::new(arc.lock().unwrap().clone()));
+                    Ok(ScreenMonitorState {
+                        events: final_events,
+                        handle: Some(handle),
+                    })
+                }
                 Err(e) => Err(e.to_string()),
             }
         }
@@ -96,21 +104,26 @@ fn ensure_screen_monitor_started() -> Result<&'static ScreenMonitorState, JsonRp
 
 fn ensure_keyboard_monitor_started() -> Result<&'static KeyboardMonitorState, JsonRpcError> {
     KEYBOARD_STATE.get_or_init(|| {
-        let events = Mutex::new(Vec::new());
-
         #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
         {
-            match monitor_keyboard::start_monitor(|evt| {
-                if let Some(Ok(state)) = KEYBOARD_STATE.get() {
-                    if let Ok(mut guard) = state.events.lock() {
-                        guard.push(evt);
-                    }
+            use std::sync::Arc;
+            
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let events_clone = Arc::clone(&events);
+            
+            match monitor_keyboard::start_monitor(move |evt| {
+                if let Ok(mut guard) = events_clone.lock() {
+                    guard.push(evt);
                 }
             }) {
-                Ok(handle) => Ok(KeyboardMonitorState {
-                    events,
-                    handle: Some(handle),
-                }),
+                Ok(handle) => {
+                    let final_events = Arc::try_unwrap(events)
+                        .unwrap_or_else(|arc| Mutex::new(arc.lock().unwrap().clone()));
+                    Ok(KeyboardMonitorState {
+                        events: final_events,
+                        handle: Some(handle),
+                    })
+                }
                 Err(e) => Err(e.to_string()),
             }
         }
@@ -133,21 +146,26 @@ fn ensure_keyboard_monitor_started() -> Result<&'static KeyboardMonitorState, Js
 
 fn ensure_mouse_monitor_started() -> Result<&'static MouseMonitorState, JsonRpcError> {
     MOUSE_STATE.get_or_init(|| {
-        let events = Mutex::new(Vec::new());
-
         #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
         {
-            match monitor_mouse::start_monitor(|evt| {
-                if let Some(Ok(state)) = MOUSE_STATE.get() {
-                    if let Ok(mut guard) = state.events.lock() {
-                        guard.push(evt);
-                    }
+            use std::sync::Arc;
+            
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let events_clone = Arc::clone(&events);
+            
+            match monitor_mouse::start_monitor(move |evt| {
+                if let Ok(mut guard) = events_clone.lock() {
+                    guard.push(evt);
                 }
             }) {
-                Ok(handle) => Ok(MouseMonitorState {
-                    events,
-                    handle: Some(handle),
-                }),
+                Ok(handle) => {
+                    let final_events = Arc::try_unwrap(events)
+                        .unwrap_or_else(|arc| Mutex::new(arc.lock().unwrap().clone()));
+                    Ok(MouseMonitorState {
+                        events: final_events,
+                        handle: Some(handle),
+                    })
+                }
                 Err(e) => Err(e.to_string()),
             }
         }

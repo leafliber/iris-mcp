@@ -130,6 +130,7 @@ dependencies = [
 name = "iris-mcp"
 version = "0.1.0"
 dependencies = [
+ "core-foundation",
  "core-graphics",
  "enigo",
  "serde",

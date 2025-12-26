@@ -81,16 +81,23 @@ mod platform {
     where
         F: Fn(ScreenEvent) + Send + Sync + 'static,
     {
-        // Minimal implementation: capture a screenshot of the main display once and emit an event on a worker thread.
+        // Capture a screenshot of the main display immediately before spawning thread
         let on_event = Arc::new(_on_event);
+        
+        // Immediately capture one frame before returning
+        if let Some(event) = capture_main_display_frame() {
+            on_event(event);
+        }
+        
+        // Spawn a background thread for future captures (if needed)
         let handle = thread::Builder::new()
             .name("screen-monitor-macos".to_string())
             .spawn({
-                let on_event = Arc::clone(&on_event);
+                let _on_event = Arc::clone(&on_event);
                 move || {
-                    if let Some(event) = capture_main_display_frame() {
-                        on_event(event);
-                    }
+                    // Background thread can periodically capture or wait for changes
+                    // For now, just complete immediately since we already captured once
+                    std::thread::sleep(std::time::Duration::from_millis(100));
                 }
             })
             .map_err(|e| MonitorError::Io(e.to_string()))?;
