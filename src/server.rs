@@ -1,4 +1,4 @@
-use crate::monitor_keyboard::{self, KeyEvent, KeyState};
+use crate::monitor_keyboard::{self, KeyEvent, KeyEventType};
 use crate::monitor_mouse::{self, MouseEvent, MouseEventKind};
 use crate::monitor_screen::{self, ScreenEvent, ScreenEventKind};
 use crate::operator_keyboard::{KeyboardController, SystemCommand};
@@ -159,21 +159,15 @@ fn screen_event_to_json(evt: &ScreenEvent) -> Value {
 }
 
 fn keyboard_event_to_json(evt: &KeyEvent) -> Value {
-    let code = match &evt.code {
-        monitor_keyboard::KeyCode::Char(c) => json!({ "type": "char", "value": c }),
-        monitor_keyboard::KeyCode::Named(name) => json!({ "type": "named", "value": name }),
-        monitor_keyboard::KeyCode::ScanCode(code) => json!({ "type": "scancode", "value": code }),
-    };
-    let state = match evt.state {
-        KeyState::Press => "press",
-        KeyState::Release => "release",
-        KeyState::Repeat => "repeat",
+    let event_type = match evt.event_type {
+        KeyEventType::Press => "press",
+        KeyEventType::Release => "release",
     };
 
     json!({
         "timestamp_micros": evt.timestamp_micros,
-        "code": code,
-        "state": state,
+        "key": evt.key,
+        "event_type": event_type,
     })
 }
 

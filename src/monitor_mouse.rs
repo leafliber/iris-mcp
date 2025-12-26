@@ -1,11 +1,11 @@
-//! Cross-platform mouse monitoring design (stubs per platform).
-//! - macOS: plan to use CGEventTap (kCGHIDEventTap) for mouse moved/scroll/button.
-//! - Windows: plan to use SetWindowsHookExW with WH_MOUSE_LL.
-//! - Linux: plan to use evdev (preferred) or X11 pointer grabs; Wayland often disallows global hooks.
-//! Currently returns NotImplemented per platform but compiles on all targets.
+//! 跨平台鼠标监控实现（使用 rdev 事件驱动）
+//! 基于操作系统原生事件机制，零 CPU 占用
 
 use std::fmt;
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::thread;
 use serde::Serialize;
+use rdev::{listen, Button, Event, EventType};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum MouseButton {
@@ -16,19 +16,19 @@ pub enum MouseButton {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum ButtonState {
+    Press,
+    Release,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum MouseEventKind {
     Move { x: i32, y: i32 },
     Button { button: MouseButton, state: ButtonState },
     Scroll { delta_x: i32, delta_y: i32 },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub enum ButtonState {
-    Press,
-    Release,
-}
-
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct MouseEvent {
     pub kind: MouseEventKind,
     pub timestamp_micros: u128,
@@ -50,67 +50,80 @@ impl fmt::Display for MonitorError {
         }
     }
 }
+
 impl std::error::Error for MonitorError {}
 
-pub struct MonitorHandle;
+pub struct MonitorHandle {
+    _thread: Option<thread::JoinHandle<()>>,
+}
 
 pub fn start_monitor<F>(on_event: F) -> Result<MonitorHandle, MonitorError>
 where
-    F: Fn(MouseEvent) + Send + 'static,
+    F: Fn(MouseEvent) + Send + Sync + 'static,
 {
-    platform::start(on_event)
+    let handle = thread::Builder::new()
+        .name("mouse-monitor".to_string())
+        .spawn(move || {
+            // rdev 使用事件驱动，只在有鼠标事件时才触发回调
+            if let Err(error) = listen(move |event: Event| {
+                if let Some(mouse_event) = process_mouse_event(event) {
+                    on_event(mouse_event);
+                }
+            }) {
+                eprintln!("rdev listen error: {:?}", error);
+            }
+        })
+        .map_err(|e| MonitorError::Io(e.to_string()))?;
+    
+    Ok(MonitorHandle {
+        _thread: Some(handle),
+    })
 }
 
-#[cfg(target_os = "macos")]
-mod platform {
-    use super::*;
-
-    pub fn start<F>(_on_event: F) -> Result<MonitorHandle, MonitorError>
-    where
-        F: Fn(MouseEvent) + Send + 'static,
-    {
-        Err(MonitorError::NotImplemented(
-            "macOS: implement CGEventTap for mouse events",
-        ))
+fn process_mouse_event(event: Event) -> Option<MouseEvent> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_micros())
+        .unwrap_or(0);
+    
+    match event.event_type {
+        EventType::MouseMove { x, y } => Some(MouseEvent {
+            kind: MouseEventKind::Move {
+                x: x as i32,
+                y: y as i32,
+            },
+            timestamp_micros: timestamp,
+        }),
+        EventType::ButtonPress(button) => Some(MouseEvent {
+            kind: MouseEventKind::Button {
+                button: map_button(button),
+                state: ButtonState::Press,
+            },
+            timestamp_micros: timestamp,
+        }),
+        EventType::ButtonRelease(button) => Some(MouseEvent {
+            kind: MouseEventKind::Button {
+                button: map_button(button),
+                state: ButtonState::Release,
+            },
+            timestamp_micros: timestamp,
+        }),
+        EventType::Wheel { delta_x, delta_y } => Some(MouseEvent {
+            kind: MouseEventKind::Scroll {
+                delta_x: delta_x as i32,
+                delta_y: delta_y as i32,
+            },
+            timestamp_micros: timestamp,
+        }),
+        _ => None, // 忽略非鼠标事件
     }
 }
 
-#[cfg(target_os = "windows")]
-mod platform {
-    use super::*;
-
-    pub fn start<F>(_on_event: F) -> Result<MonitorHandle, MonitorError>
-    where
-        F: Fn(MouseEvent) + Send + 'static,
-    {
-        Err(MonitorError::NotImplemented(
-            "Windows: implement WH_MOUSE_LL hook",
-        ))
-    }
-}
-
-#[cfg(target_os = "linux")]
-mod platform {
-    use super::*;
-
-    pub fn start<F>(_on_event: F) -> Result<MonitorHandle, MonitorError>
-    where
-        F: Fn(MouseEvent) + Send + 'static,
-    {
-        Err(MonitorError::NotImplemented(
-            "Linux: implement evdev or X11 pointer grabs; Wayland likely unsupported",
-        ))
-    }
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-mod platform {
-    use super::*;
-
-    pub fn start<F>(_on_event: F) -> Result<MonitorHandle, MonitorError>
-    where
-        F: Fn(MouseEvent) + Send + 'static,
-    {
-        Err(MonitorError::UnsupportedPlatform(std::env::consts::OS))
+fn map_button(button: Button) -> MouseButton {
+    match button {
+        Button::Left => MouseButton::Left,
+        Button::Right => MouseButton::Right,
+        Button::Middle => MouseButton::Middle,
+        Button::Unknown(n) => MouseButton::Other(n),
     }
 }
