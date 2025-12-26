@@ -112,6 +112,20 @@ Claude: [调用 type_text]
 Claude: [调用 monitor_keyboard_events 并定期轮询]
 ```
 
+### 4. 编程示例
+项目提供了完整的示例代码：
+- **Shell 脚本**: [`examples/monitor_demo.sh`](examples/monitor_demo.sh) - 演示监控工具的使用
+- **Python 客户端**: [`examples/client_example.py`](examples/client_example.py) - 完整的 Python 封装和示例
+
+运行示例：
+```bash
+# Shell 演示
+./examples/monitor_demo.sh
+
+# Python 演示
+python3 examples/client_example.py
+```
+
 ## 运行
 ```bash
 ./target/release/iris-mcp
@@ -126,6 +140,8 @@ Sending: {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05",...}}
 ```
 
 ## 已暴露的工具
+
+📖 **完整工具速查表**: [`TOOL_REFERENCE.md`](TOOL_REFERENCE.md) - 包含所有工具的详细参数、示例和事件格式
 
 ### 输入操作工具
 | 工具名称 | 功能描述 | 主要参数 |
