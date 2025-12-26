@@ -70,39 +70,37 @@ where
     platform::start(on_event)
 }
 
+/// 按需捕获一帧屏幕截图（不启动持续监控）
+pub fn capture_frame() -> Result<ScreenEvent, MonitorError> {
+    platform::capture_frame()
+}
+
 #[cfg(target_os = "macos")]
 mod platform {
     use super::*;
     use core_graphics::display::CGDisplay;
     use core_graphics::image::CGImage;
-    use std::sync::Arc;
 
     pub fn start<F>(_on_event: F) -> Result<MonitorHandle, MonitorError>
     where
         F: Fn(ScreenEvent) + Send + Sync + 'static,
     {
-        // Capture a screenshot of the main display immediately before spawning thread
-        let on_event = Arc::new(_on_event);
-        
-        // Immediately capture one frame before returning
-        if let Some(event) = capture_main_display_frame() {
-            on_event(event);
-        }
-        
-        // Spawn a background thread for future captures (if needed)
+        // 屏幕监控不再持续运行，而是按需调用 capture_frame()
+        // 这里保留接口但立即返回
         let handle = thread::Builder::new()
             .name("screen-monitor-macos".to_string())
-            .spawn({
-                let _on_event = Arc::clone(&on_event);
-                move || {
-                    // Background thread can periodically capture or wait for changes
-                    // For now, just complete immediately since we already captured once
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                }
+            .spawn(move || {
+                // 空线程，立即完成
             })
             .map_err(|e| MonitorError::Io(e.to_string()))?;
 
         Ok(MonitorHandle { thread: Some(handle) })
+    }
+
+    /// 按需捕获主显示器的一帧截图
+    pub fn capture_frame() -> Result<ScreenEvent, MonitorError> {
+        capture_main_display_frame()
+            .ok_or_else(|| MonitorError::Io("Failed to capture screen frame".to_string()))
     }
 
     fn capture_main_display_frame() -> Option<ScreenEvent> {
@@ -139,6 +137,12 @@ mod platform {
             "Windows: implement DXGI output duplication or display change notifications",
         ))
     }
+
+    pub fn capture_frame() -> Result<ScreenEvent, MonitorError> {
+        Err(MonitorError::NotImplemented(
+            "Windows: implement screenshot capture",
+        ))
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -153,6 +157,12 @@ mod platform {
             "Linux: implement DRM/GBM or X11 RandR events; Wayland likely restricted",
         ))
     }
+
+    pub fn capture_frame() -> Result<ScreenEvent, MonitorError> {
+        Err(MonitorError::NotImplemented(
+            "Linux: implement screenshot capture",
+        ))
+    }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
@@ -163,6 +173,10 @@ mod platform {
     where
         F: Fn(ScreenEvent) + Send + 'static,
     {
+        Err(MonitorError::UnsupportedPlatform(std::env::consts::OS))
+    }
+
+    pub fn capture_frame() -> Result<ScreenEvent, MonitorError> {
         Err(MonitorError::UnsupportedPlatform(std::env::consts::OS))
     }
 }

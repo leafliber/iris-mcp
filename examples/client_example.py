@@ -93,14 +93,11 @@ class IrisMCPClient:
         result = self.call_tool("type_text", {"text": text})
         return result["content"][0]["text"]
     
-    def monitor_screen_events(self, cursor: int = 0) -> Dict[str, Any]:
-        """获取屏幕监控事件"""
-        result = self.call_tool("monitor_screen_events", {"cursor": cursor})
-        events_data = result["content"][1]["json"]
-        return {
-            "events": events_data["events"],
-            "next_cursor": events_data["next_cursor"]
-        }
+    def monitor_screen_events(self) -> Dict[str, Any]:
+        """截取当前屏幕画面（返回单个事件）"""
+        result = self.call_tool("monitor_screen_events", {})
+        event_data = result["content"][1]["json"]
+        return event_data["event"]
     
     def monitor_keyboard_events(self, cursor: int = 0) -> Dict[str, Any]:
         """获取键盘监控事件"""
@@ -108,7 +105,8 @@ class IrisMCPClient:
         events_data = result["content"][1]["json"]
         return {
             "events": events_data["events"],
-            "next_cursor": events_data["next_cursor"]
+            "next_cursor": events_data["next_cursor"],
+            "count": len(events_data["events"])
         }
     
     def monitor_mouse_events(self, cursor: int = 0) -> Dict[str, Any]:
@@ -117,7 +115,8 @@ class IrisMCPClient:
         events_data = result["content"][1]["json"]
         return {
             "events": events_data["events"],
-            "next_cursor": events_data["next_cursor"]
+            "next_cursor": events_data["next_cursor"],
+            "count": len(events_data["events"])
         }
     
     def close(self):

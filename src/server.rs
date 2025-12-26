@@ -35,12 +35,6 @@ struct JsonRpcError {
     data: Option<Value>,
 }
 
-struct ScreenMonitorState {
-    events: Mutex<Vec<ScreenEvent>>,
-    #[allow(dead_code)]
-    handle: Option<monitor_screen::MonitorHandle>,
-}
-
 struct KeyboardMonitorState {
     events: Mutex<Vec<KeyEvent>>,
     #[allow(dead_code)]
@@ -53,54 +47,8 @@ struct MouseMonitorState {
     handle: Option<monitor_mouse::MonitorHandle>,
 }
 
-static SCREEN_STATE: OnceLock<Result<ScreenMonitorState, String>> = OnceLock::new();
 static KEYBOARD_STATE: OnceLock<Result<KeyboardMonitorState, String>> = OnceLock::new();
 static MOUSE_STATE: OnceLock<Result<MouseMonitorState, String>> = OnceLock::new();
-
-fn ensure_screen_monitor_started() -> Result<&'static ScreenMonitorState, JsonRpcError> {
-    SCREEN_STATE.get_or_init(|| {
-        #[cfg(target_os = "macos")]
-        {
-            use std::sync::Arc;
-            
-            // Create events buffer first
-            let events = Arc::new(Mutex::new(Vec::new()));
-            let events_clone = Arc::clone(&events);
-            
-            // Start monitor with the cloned events buffer
-            match monitor_screen::start_monitor(move |evt| {
-                if let Ok(mut guard) = events_clone.lock() {
-                    guard.push(evt);
-                }
-            }) {
-                Ok(handle) => {
-                    // Convert Arc<Mutex> back to Mutex for the state
-                    let final_events = Arc::try_unwrap(events)
-                        .unwrap_or_else(|arc| Mutex::new(arc.lock().unwrap().clone()));
-                    Ok(ScreenMonitorState {
-                        events: final_events,
-                        handle: Some(handle),
-                    })
-                }
-                Err(e) => Err(e.to_string()),
-            }
-        }
-
-        #[cfg(not(target_os = "macos"))]
-        {
-            Err("screen monitor unsupported on this platform".to_string())
-        }
-    });
-
-    match SCREEN_STATE.get().expect("state initialized") {
-        Ok(state) => Ok(state),
-        Err(msg) => Err(JsonRpcError {
-            code: -32001,
-            message: msg.clone(),
-            data: None,
-        }),
-    }
-}
 
 fn ensure_keyboard_monitor_started() -> Result<&'static KeyboardMonitorState, JsonRpcError> {
     KEYBOARD_STATE.get_or_init(|| {
@@ -272,6 +220,12 @@ fn parse_button(s: &str) -> Result<Button, JsonRpcError> {
 }
 
 fn handle_initialize(_params: Option<Value>) -> Value {
+    // 自动启动键盘和鼠标监控（后台积累事件）
+    let _ = ensure_keyboard_monitor_started();
+    let _ = ensure_mouse_monitor_started();
+    
+    // 注意：屏幕监控不在这里启动，因为它是按需截图的
+    
     json!({
         "protocolVersion": "2024-11-05",
         "capabilities": {
@@ -462,21 +416,16 @@ fn handle_list_tools(_params: Option<Value>) -> Value {
             }),
             json!({
                 "name": "monitor_screen_events",
-                "description": "获取自上次游标后的最新屏幕监控事件（自动启动屏幕监控）",
+                "description": "截取当前屏幕画面（每次调用返回一帧新的屏幕截图）",
                 "inputSchema": {
                     "type": "object",
-                    "properties": {
-                        "cursor": {
-                            "type": "integer",
-                            "description": "从该游标开始读取事件，默认0"
-                        }
-                    },
+                    "properties": {},
                     "required": []
                 }
             }),
             json!({
                 "name": "monitor_keyboard_events",
-                "description": "获取自上次游标后的键盘监控事件（自动启动键盘监控）",
+                "description": "获取已积累的键盘监控事件（服务器启动时自动开始监控）",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -490,7 +439,7 @@ fn handle_list_tools(_params: Option<Value>) -> Value {
             }),
             json!({
                 "name": "monitor_mouse_events",
-                "description": "获取自上次游标后的鼠标监控事件（自动启动鼠标监控）",
+                "description": "获取已积累的鼠标监控事件（服务器启动时自动开始监控）",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -919,35 +868,25 @@ fn handle_call_tool(params: Option<Value>) -> Result<Value, JsonRpcError> {
             }))
         }
         "monitor_screen_events" => {
-            let cursor = arguments["cursor"].as_u64().unwrap_or(0) as usize;
-            let state = ensure_screen_monitor_started()?;
-            let events_guard = state.events.lock().map_err(|e| JsonRpcError {
-                code: -32603,
-                message: format!("Failed to lock events: {}", e),
+            // 屏幕监控：每次调用时截取一帧新的屏幕
+            let event = monitor_screen::capture_frame().map_err(|e| JsonRpcError {
+                code: -32001,
+                message: e.to_string(),
                 data: None,
             })?;
 
-            let total = events_guard.len();
-            let slice = if cursor >= total {
-                &[][..]
-            } else {
-                &events_guard[cursor..]
-            };
-
-            let events_json: Vec<Value> = slice.iter().map(screen_event_to_json).collect();
-            let next_cursor = total;
+            let event_json = screen_event_to_json(&event);
 
             Ok(json!({
                 "content": [
                     {
                         "type": "text",
-                        "text": format!("返回{}条屏幕事件，next_cursor={} (total={})", events_json.len(), next_cursor, total)
+                        "text": "已捕获当前屏幕帧"
                     },
                     {
                         "type": "json",
                         "json": {
-                            "events": events_json,
-                            "next_cursor": next_cursor
+                            "event": event_json
                         }
                     }
                 ]
