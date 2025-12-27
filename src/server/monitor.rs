@@ -1,7 +1,6 @@
 use super::jsonrpc::JsonRpcError;
-use crate::monitor::key_mouse::{KeyEvent, KeyEventType, MouseEvent, MouseEventKind, MouseButton, ButtonState};
+use crate::monitor::key_mouse::{self, KeyEvent, KeyEventType, MouseEvent, MouseEventKind, MouseButton, ButtonState};
 use crate::monitor::screen::{self, ScreenEvent, ScreenEventKind};
-use crate::monitor::state as monitor_state;
 use serde_json::{json, Value};
 
 pub fn screen_event_to_json(evt: &ScreenEvent) -> Value {
@@ -139,28 +138,16 @@ pub fn handle_monitor_screen_events(_arguments: &Value) -> Result<Value, JsonRpc
     }
 }
 
-pub fn handle_monitor_keyboard_events(arguments: &Value) -> Result<Value, JsonRpcError> {
-    let cursor = arguments["cursor"].as_u64().unwrap_or(0) as usize;
-    let state = monitor_state::ensure_keyboard_monitor_started()?;
-    let events_guard = state.events.lock().map_err(|e| JsonRpcError {
-        code: -32603,
-        message: format!("Failed to lock events: {}", e),
-        data: None,
-    })?;
-
-    let total = events_guard.len();
-    let slice = if cursor >= total {
-        &[][..]
-    } else {
-        &events_guard[cursor..]
-    };
-
-    let events_json: Vec<Value> = slice.iter().map(keyboard_event_to_json).collect();
-    let next_cursor = total;
+pub fn handle_monitor_keyboard_events(_arguments: &Value) -> Result<Value, JsonRpcError> {
+    // 获取所有键盘事件并清空存储
+    let events = key_mouse::take_keyboard_events();
+    
+    let events_json: Vec<Value> = events.iter().map(keyboard_event_to_json).collect();
+    let total = events.len();
 
     let result = json!({
         "events": events_json,
-        "next_cursor": next_cursor
+        "total": total
     });
     let result_text = serde_json::to_string_pretty(&result)
         .unwrap_or_else(|_| result.to_string());
@@ -169,35 +156,23 @@ pub fn handle_monitor_keyboard_events(arguments: &Value) -> Result<Value, JsonRp
         "content": [
             {
                 "type": "text",
-                "text": format!("返回{}条键盘事件，next_cursor={} (total={})\n\n事件数据：\n{}", 
-                    events_json.len(), next_cursor, total, result_text)
+                "text": format!("返回{}条键盘事件（已清空存储）\n\n事件数据：\n{}", 
+                    total, result_text)
             }
         ]
     }))
 }
 
-pub fn handle_monitor_mouse_events(arguments: &Value) -> Result<Value, JsonRpcError> {
-    let cursor = arguments["cursor"].as_u64().unwrap_or(0) as usize;
-    let state = monitor_state::ensure_mouse_monitor_started()?;
-    let events_guard = state.events.lock().map_err(|e| JsonRpcError {
-        code: -32603,
-        message: format!("Failed to lock events: {}", e),
-        data: None,
-    })?;
-
-    let total = events_guard.len();
-    let slice = if cursor >= total {
-        &[][..]
-    } else {
-        &events_guard[cursor..]
-    };
-
-    let events_json: Vec<Value> = slice.iter().map(mouse_event_to_json).collect();
-    let next_cursor = total;
+pub fn handle_monitor_mouse_events(_arguments: &Value) -> Result<Value, JsonRpcError> {
+    // 获取所有鼠标事件并清空存储
+    let events = key_mouse::take_mouse_events();
+    
+    let events_json: Vec<Value> = events.iter().map(mouse_event_to_json).collect();
+    let total = events.len();
 
     let result = json!({
         "events": events_json,
-        "next_cursor": next_cursor
+        "total": total
     });
     let result_text = serde_json::to_string_pretty(&result)
         .unwrap_or_else(|_| result.to_string());
@@ -206,8 +181,8 @@ pub fn handle_monitor_mouse_events(arguments: &Value) -> Result<Value, JsonRpcEr
         "content": [
             {
                 "type": "text",
-                "text": format!("返回{}条鼠标事件，next_cursor={} (total={})\n\n事件数据：\n{}", 
-                    events_json.len(), next_cursor, total, result_text)
+                "text": format!("返回{}条鼠标事件（已清空存储）\n\n事件数据：\n{}", 
+                    total, result_text)
             }
         ]
     }))

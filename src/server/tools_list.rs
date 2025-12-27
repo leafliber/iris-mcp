@@ -181,8 +181,10 @@ pub fn get_tools_list() -> Value {
                 "description": "截取当前屏幕画面，返回 PNG 格式的图像（每次调用返回一帧新的屏幕截图）",
                 "inputSchema": {
                     "type": "object",
-                    "properties": {},
-                    "required": []
+                    "properties": {
+                        "reason": { "type": "string", "description": "调用原因，便于审计" }
+                    },
+                    "required": ["reason"]
                 }
             },
             {
@@ -191,12 +193,13 @@ pub fn get_tools_list() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
+                        "reason": { "type": "string", "description": "调用原因，便于审计" },
                         "cursor": {
                             "type": "integer",
                             "description": "从该游标开始读取事件，默认0"
                         }
                     },
-                    "required": []
+                    "required": ["reason"]
                 }
             },
             {
@@ -205,12 +208,13 @@ pub fn get_tools_list() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
+                        "reason": { "type": "string", "description": "调用原因，便于审计" },
                         "cursor": {
                             "type": "integer",
                             "description": "从该游标开始读取事件，默认0"
                         }
                     },
-                    "required": []
+                    "required": ["reason"]
                 }
             }
         ]

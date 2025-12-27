@@ -5,16 +5,29 @@ pub mod mouse;
 pub mod tools_list;
 
 use jsonrpc::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
-use crate::monitor::state as monitor_state;
+use crate::monitor::key_mouse;
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
 
+fn sanitize_id(id: Option<Value>) -> Value {
+    match id {
+        Some(v) if !v.is_null() => v,
+        _ => json!(0),
+    }
+}
+
+fn default_initialize_request() -> JsonRpcRequest {
+    JsonRpcRequest {
+        jsonrpc: "2.0".to_string(),
+        id: Some(json!(0)),
+        method: "initialize".to_string(),
+        params: None,
+    }
+}
+
 fn handle_initialize(_params: Option<Value>) -> Value {
-    // 自动启动键盘和鼠标监控（后台积累事件）
-    let _ = monitor_state::ensure_keyboard_monitor_started();
-    let _ = monitor_state::ensure_mouse_monitor_started();
-    
-    // 注意：屏幕监控不在这里启动，因为它是按需截图的
+    // 启动键盘和鼠标事件监控系统
+    key_mouse::initialize();
     
     json!({
         "protocolVersion": "2024-11-05",
@@ -132,9 +145,26 @@ pub fn run_server() -> io::Result<()> {
 
         eprintln!("Received: {}", line);
 
-        match serde_json::from_str::<JsonRpcRequest>(&line) {
+        // 一些客户端在握手时发送空对象 {}，在此兼容为 initialize 请求
+        let parsed_req = if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&line) {
+            if map.is_empty() {
+                Ok(default_initialize_request())
+            } else {
+                serde_json::from_value::<JsonRpcRequest>(Value::Object(map))
+            }
+        } else {
+            serde_json::from_str::<JsonRpcRequest>(&line)
+        };
+
+        match parsed_req {
             Ok(request) => {
+                let id = sanitize_id(request.id.clone());
                 let response = handle_request(request);
+                // Ensure id is always string/number to satisfy strict clients
+                let response = JsonRpcResponse {
+                    id: Some(id),
+                    ..response
+                };
                 let response_json = serde_json::to_string(&response)?;
                 eprintln!("Sending: {}", response_json);
                 writeln!(stdout, "{}", response_json)?;
@@ -142,9 +172,10 @@ pub fn run_server() -> io::Result<()> {
             }
             Err(e) => {
                 eprintln!("Failed to parse request: {}", e);
+                // Some clients reject `null` ids; use 0 to conform to string/number schema.
                 let error_response = JsonRpcResponse {
                     jsonrpc: "2.0".to_string(),
-                    id: None,
+                    id: Some(json!(0)),
                     result: None,
                     error: Some(JsonRpcError {
                         code: -32700,
