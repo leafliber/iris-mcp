@@ -37,7 +37,16 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libx11-dev libxdo-dev libxcb1-dev libxrandr-dev libdbus-1-dev pkg-config
+          sudo apt-get install -y \
+            libx11-dev \
+            libxi-dev \
+            libxtst-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxcursor-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            pkg-config
 
       - name: Build
         run: cargo build --release
