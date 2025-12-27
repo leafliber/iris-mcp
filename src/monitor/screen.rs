@@ -7,12 +7,18 @@ use std::fmt;
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum ScreenEventKind {
     GeometryChanged { width: u32, height: u32, scale: f32 },
     DisplayAdded,
     DisplayRemoved,
-    FrameCaptured { width: u32, height: u32, format: FrameFormat },
+    FrameCaptured { 
+        width: u32, 
+        height: u32, 
+        format: FrameFormat,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        image_data: Option<Vec<u8>>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -103,22 +109,74 @@ mod platform {
 
     fn capture_main_display_frame() -> Option<ScreenEvent> {
         let main = CGDisplay::main();
-        let image: CGImage = main.image()?;
+        let cg_image: CGImage = main.image()?;
 
-        let width = image.width() as u32;
-        let height = image.height() as u32;
+        let width = cg_image.width() as u32;
+        let height = cg_image.height() as u32;
+
+        // 将 CGImage 转换为 PNG
+        let image_data = cgimage_to_png(&cg_image, width, height)?;
 
         Some(ScreenEvent {
             kind: ScreenEventKind::FrameCaptured {
                 width,
                 height,
                 format: FrameFormat::Bgra8,
+                image_data: Some(image_data),
             },
             timestamp_micros: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_micros())
                 .unwrap_or(0),
         })
+    }
+
+    /// 将 CGImage 转换为 PNG 字节
+    fn cgimage_to_png(cg_image: &CGImage, width: u32, height: u32) -> Option<Vec<u8>> {
+        use image::{ImageBuffer, RgbaImage, ImageFormat};
+        use std::io::Cursor;
+        use std::os::raw::c_void;
+        use core_graphics::color_space::CGColorSpace;
+        use core_graphics::context::CGContext;
+        use core_graphics::geometry::CGRect;
+
+        // 创建位图上下文来提取像素数据
+        let bytes_per_pixel = 4;
+        let bytes_per_row = bytes_per_pixel * width as usize;
+        let buffer_size = bytes_per_row * height as usize;
+        let mut buffer: Vec<u8> = vec![0; buffer_size];
+
+        // 使用 Core Graphics 创建位图上下文并绘制图像
+        let color_space = CGColorSpace::create_device_rgb();
+        let bitmap_info = core_graphics::base::kCGImageAlphaPremultipliedLast 
+            | core_graphics::base::kCGBitmapByteOrder32Big;
+
+        let context = CGContext::create_bitmap_context(
+            Some(buffer.as_mut_ptr() as *mut c_void),
+            width as usize,
+            height as usize,
+            8,
+            bytes_per_row,
+            &color_space,
+            bitmap_info,
+        );
+
+        let rect = CGRect::new(
+            &core_graphics::geometry::CGPoint::new(0.0, 0.0),
+            &core_graphics::geometry::CGSize::new(width as f64, height as f64),
+        );
+
+        context.draw_image(rect, cg_image);
+
+        // 现在 buffer 包含 RGBA 数据，转换为 PNG
+        let rgba_image: RgbaImage = ImageBuffer::from_raw(width, height, buffer)?;
+
+        // 编码为 PNG
+        let mut png_data = Vec::new();
+        let mut cursor = Cursor::new(&mut png_data);
+        rgba_image.write_to(&mut cursor, ImageFormat::Png).ok()?;
+        
+        Some(png_data)
     }
 
 }

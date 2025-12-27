@@ -178,7 +178,7 @@ pub fn get_tools_list() -> Value {
             },
             {
                 "name": "monitor_screen_events",
-                "description": "截取当前屏幕画面（每次调用返回一帧新的屏幕截图）",
+                "description": "截取当前屏幕画面，返回 PNG 格式的图像（每次调用返回一帧新的屏幕截图）",
                 "inputSchema": {
                     "type": "object",
                     "properties": {},

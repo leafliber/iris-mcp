@@ -5,7 +5,7 @@ use crate::monitor::state as monitor_state;
 use serde_json::{json, Value};
 
 pub fn screen_event_to_json(evt: &ScreenEvent) -> Value {
-    let kind = match evt.kind {
+    let kind = match &evt.kind {
         ScreenEventKind::GeometryChanged { width, height, scale } => json!({
             "type": "geometry_changed",
             "width": width,
@@ -14,12 +14,19 @@ pub fn screen_event_to_json(evt: &ScreenEvent) -> Value {
         }),
         ScreenEventKind::DisplayAdded => json!({ "type": "display_added" }),
         ScreenEventKind::DisplayRemoved => json!({ "type": "display_removed" }),
-        ScreenEventKind::FrameCaptured { width, height, format } => json!({
-            "type": "frame_captured",
-            "width": width,
-            "height": height,
-            "format": format,
-        }),
+        ScreenEventKind::FrameCaptured { width, height, format, image_data } => {
+            let mut result = json!({
+                "type": "frame_captured",
+                "width": width,
+                "height": height,
+                "format": format,
+            });
+            if let Some(data) = image_data {
+                result["has_image_data"] = json!(true);
+                result["image_size_bytes"] = json!(data.len());
+            }
+            result
+        },
     };
 
     json!({
@@ -77,22 +84,59 @@ pub fn handle_monitor_screen_events(_arguments: &Value) -> Result<Value, JsonRpc
         data: None,
     })?;
 
+    // 提取图像数据
+    let (width, height, image_data) = match &event.kind {
+        ScreenEventKind::FrameCaptured { width, height, image_data, .. } => {
+            (*width, *height, image_data.clone())
+        }
+        _ => {
+            return Err(JsonRpcError {
+                code: -32001,
+                message: "Unexpected event type".to_string(),
+                data: None,
+            });
+        }
+    };
+
     let event_json = screen_event_to_json(&event);
 
-    Ok(json!({
-        "content": [
-            {
-                "type": "text",
-                "text": "已捕获当前屏幕帧"
-            },
-            {
-                "type": "json",
-                "json": {
-                    "event": event_json
-                }
-            }
-        ]
-    }))
+    match image_data {
+        Some(data) => {
+            // 使用 base64 编码图像数据
+            use base64::{Engine as _, engine::general_purpose};
+            let base64_data = general_purpose::STANDARD.encode(&data);
+            
+            Ok(json!({
+                "content": [
+                    {
+                        "type": "image",
+                        "data": base64_data,
+                        "mimeType": "image/png"
+                    },
+                    {
+                        "type": "text",
+                        "text": format!("已捕获屏幕截图\n尺寸: {}x{}\n大小: {} bytes", 
+                            width, height, data.len())
+                    }
+                ]
+            }))
+        }
+        None => {
+            // 如果没有图像数据，返回事件信息
+            let event_text = serde_json::to_string_pretty(&event_json)
+                .unwrap_or_else(|_| event_json.to_string());
+            
+            Ok(json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": format!("屏幕事件信息\n尺寸: {}x{}\n\n详情：\n{}", 
+                            width, height, event_text)
+                    }
+                ]
+            }))
+        }
+    }
 }
 
 pub fn handle_monitor_keyboard_events(arguments: &Value) -> Result<Value, JsonRpcError> {
@@ -114,18 +158,19 @@ pub fn handle_monitor_keyboard_events(arguments: &Value) -> Result<Value, JsonRp
     let events_json: Vec<Value> = slice.iter().map(keyboard_event_to_json).collect();
     let next_cursor = total;
 
+    let result = json!({
+        "events": events_json,
+        "next_cursor": next_cursor
+    });
+    let result_text = serde_json::to_string_pretty(&result)
+        .unwrap_or_else(|_| result.to_string());
+
     Ok(json!({
         "content": [
             {
                 "type": "text",
-                "text": format!("返回{}条键盘事件，next_cursor={} (total={})", events_json.len(), next_cursor, total)
-            },
-            {
-                "type": "json",
-                "json": {
-                    "events": events_json,
-                    "next_cursor": next_cursor
-                }
+                "text": format!("返回{}条键盘事件，next_cursor={} (total={})\n\n事件数据：\n{}", 
+                    events_json.len(), next_cursor, total, result_text)
             }
         ]
     }))
@@ -150,18 +195,19 @@ pub fn handle_monitor_mouse_events(arguments: &Value) -> Result<Value, JsonRpcEr
     let events_json: Vec<Value> = slice.iter().map(mouse_event_to_json).collect();
     let next_cursor = total;
 
+    let result = json!({
+        "events": events_json,
+        "next_cursor": next_cursor
+    });
+    let result_text = serde_json::to_string_pretty(&result)
+        .unwrap_or_else(|_| result.to_string());
+
     Ok(json!({
         "content": [
             {
                 "type": "text",
-                "text": format!("返回{}条鼠标事件，next_cursor={} (total={})", events_json.len(), next_cursor, total)
-            },
-            {
-                "type": "json",
-                "json": {
-                    "events": events_json,
-                    "next_cursor": next_cursor
-                }
+                "text": format!("返回{}条鼠标事件，next_cursor={} (total={})\n\n事件数据：\n{}", 
+                    events_json.len(), next_cursor, total, result_text)
             }
         ]
     }))
