@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Cross-platform screen monitoring design (stubs per platform).
 //! Goals: detect display topology/geometry changes or periodic frame capture events.
 //! Current state: per-platform stubs returning NotImplemented but compiling everywhere.

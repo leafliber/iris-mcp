@@ -1,5 +1,4 @@
-use crate::monitor_keyboard::{self, KeyEvent, KeyEventType};
-use crate::monitor_mouse::{self, MouseEvent, MouseEventKind};
+use crate::monitor_key_mouse::{self, KeyEvent, KeyEventType, MouseEvent, MouseEventKind, MouseButton, ButtonState};
 use crate::monitor_screen::{self, ScreenEvent, ScreenEventKind};
 use crate::operator_keyboard::{KeyboardController, SystemCommand};
 use crate::operator_mouse::MouseController;
@@ -7,7 +6,7 @@ use enigo::{Button, Direction, Enigo, Key, Settings};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 #[derive(Debug, Deserialize)]
 struct JsonRpcRequest {
@@ -36,15 +35,15 @@ struct JsonRpcError {
 }
 
 struct KeyboardMonitorState {
-    events: Mutex<Vec<KeyEvent>>,
+    events: Arc<Mutex<Vec<KeyEvent>>>,
     #[allow(dead_code)]
-    handle: Option<monitor_keyboard::MonitorHandle>,
+    handle: Option<monitor_key_mouse::MonitorHandle>,
 }
 
 struct MouseMonitorState {
-    events: Mutex<Vec<MouseEvent>>,
+    events: Arc<Mutex<Vec<MouseEvent>>>,
     #[allow(dead_code)]
-    handle: Option<monitor_mouse::MonitorHandle>,
+    handle: Option<monitor_key_mouse::MonitorHandle>,
 }
 
 static KEYBOARD_STATE: OnceLock<Result<KeyboardMonitorState, String>> = OnceLock::new();
@@ -59,16 +58,15 @@ fn ensure_keyboard_monitor_started() -> Result<&'static KeyboardMonitorState, Js
             let events = Arc::new(Mutex::new(Vec::new()));
             let events_clone = Arc::clone(&events);
             
-            match monitor_keyboard::start_monitor(move |evt| {
+            match monitor_key_mouse::start_keyboard_monitor(move |evt| {
                 if let Ok(mut guard) = events_clone.lock() {
                     guard.push(evt);
                 }
             }) {
                 Ok(handle) => {
-                    let final_events = Arc::try_unwrap(events)
-                        .unwrap_or_else(|arc| Mutex::new(arc.lock().unwrap().clone()));
+                    // 不要 unwrap Arc，因为回调仍在使用它
                     Ok(KeyboardMonitorState {
-                        events: final_events,
+                        events: events,
                         handle: Some(handle),
                     })
                 }
@@ -101,16 +99,15 @@ fn ensure_mouse_monitor_started() -> Result<&'static MouseMonitorState, JsonRpcE
             let events = Arc::new(Mutex::new(Vec::new()));
             let events_clone = Arc::clone(&events);
             
-            match monitor_mouse::start_monitor(move |evt| {
+            match monitor_key_mouse::start_mouse_monitor(move |evt| {
                 if let Ok(mut guard) = events_clone.lock() {
                     guard.push(evt);
                 }
             }) {
                 Ok(handle) => {
-                    let final_events = Arc::try_unwrap(events)
-                        .unwrap_or_else(|arc| Mutex::new(arc.lock().unwrap().clone()));
+                    // 不要 unwrap Arc，因为回调仍在使用它
                     Ok(MouseMonitorState {
-                        events: final_events,
+                        events: events,
                         handle: Some(handle),
                     })
                 }
@@ -176,14 +173,14 @@ fn mouse_event_to_json(evt: &MouseEvent) -> Value {
         MouseEventKind::Move { x, y } => json!({ "type": "move", "x": x, "y": y }),
         MouseEventKind::Button { button, state } => {
             let button = match button {
-                monitor_mouse::MouseButton::Left => "left".to_string(),
-                monitor_mouse::MouseButton::Middle => "middle".to_string(),
-                monitor_mouse::MouseButton::Right => "right".to_string(),
-                monitor_mouse::MouseButton::Other(v) => format!("other_{}", v),
+                MouseButton::Left => "left".to_string(),
+                MouseButton::Middle => "middle".to_string(),
+                MouseButton::Right => "right".to_string(),
+                MouseButton::Other(v) => format!("other_{}", v),
             };
             let state = match state {
-                monitor_mouse::ButtonState::Press => "press",
-                monitor_mouse::ButtonState::Release => "release",
+                ButtonState::Press => "press",
+                ButtonState::Release => "release",
             };
             json!({ "type": "button", "button": button, "state": state })
         }

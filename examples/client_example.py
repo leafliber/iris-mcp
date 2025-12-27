@@ -94,10 +94,15 @@ class IrisMCPClient:
         return result["content"][0]["text"]
     
     def monitor_screen_events(self) -> Dict[str, Any]:
-        """截取当前屏幕画面（返回单个事件）"""
+        """截取当前屏幕画面（按需捕获）"""
         result = self.call_tool("monitor_screen_events", {})
-        event_data = result["content"][1]["json"]
-        return event_data["event"]
+        events_data = result["content"][1]["json"]
+        return {
+            "event": events_data.get("event"),
+            "image_base64": events_data.get("image_base64", ""),
+            "width": events_data.get("width", 0),
+            "height": events_data.get("height", 0)
+        }
     
     def monitor_keyboard_events(self, cursor: int = 0) -> Dict[str, Any]:
         """获取键盘监控事件"""
@@ -182,27 +187,48 @@ def main():
         # 4. 监控示例
         print("\n4. 监控工具示例...")
         try:
-            # 屏幕监控
-            print("   获取屏幕事件...")
-            screen_data = client.monitor_screen_events(cursor=0)
-            print(f"   - 获得 {len(screen_data['events'])} 条事件")
-            print(f"   - next_cursor: {screen_data['next_cursor']}")
-            if len(screen_data['events']) == 0:
-                print("   提示: 屏幕监控已启动但暂无事件")
-                print("       在 macOS 上需要辅助功能权限")
-            else:
-                # 显示第一个事件
-                first_event = screen_data['events'][0]
-                print(f"   第一个事件: {first_event['kind']['type']}")
+            # 屏幕监控（按需截图）
+            print("   捕获屏幕截图...")
+            screen_data = client.monitor_screen_events()
+            event = screen_data['event']
+            print(f"   - 事件类型: {event['kind']['type']}")
+            print(f"   - 分辨率: {screen_data['width']}x{screen_data['height']}")
+            print(f"   - 图像数据: {len(screen_data['image_base64'])} 字节 (base64)")
             
-            # 键盘监控（预期失败）
-            print("\n   尝试获取键盘事件（当前为存根）...")
+            # 键盘监控（事件驱动，累积事件）
+            print("\n   获取键盘事件（从启动开始累积）...")
+            print("   提示: 请在接下来按几个键...")
+            import time
+            time.sleep(2)
             try:
                 keyboard_data = client.monitor_keyboard_events(cursor=0)
-                print(f"   - 获得 {len(keyboard_data['events'])} 条事件")
+                print(f"   ✅ 获得 {keyboard_data['count']} 条键盘事件")
+                if keyboard_data['count'] > 0:
+                    print(f"   前3个事件:")
+                    for evt in keyboard_data['events'][:3]:
+                        print(f"     - {evt['key']} ({evt['event_type']})")
             except Exception as e:
                 error_msg = str(e).replace('RPC Error: ', '')
-                print(f"   - 预期错误: {error_msg}")
+                print(f"   ⚠️ {error_msg}")
+                print(f"   提示: 需要在系统设置中授予辅助功能权限")
+            
+            # 鼠标监控（事件驱动，累积事件）
+            print("\n   获取鼠标事件...")
+            try:
+                mouse_data = client.monitor_mouse_events(cursor=0)
+                print(f"   ✅ 获得 {mouse_data['count']} 条鼠标事件")
+                if mouse_data['count'] > 0:
+                    print(f"   前3个事件:")
+                    for evt in mouse_data['events'][:3]:
+                        kind = evt['kind']
+                        if kind.get('type') == 'Move':
+                            print(f"     - 移动到 ({kind['x']}, {kind['y']})")
+                        elif kind.get('type') == 'Button':
+                            print(f"     - {kind['button']} {kind['state']}")
+            except Exception as e:
+                error_msg = str(e).replace('RPC Error: ', '')
+                print(f"   ⚠️ {error_msg}")
+
             
         except Exception as e:
             print(f"   监控失败: {e}")
